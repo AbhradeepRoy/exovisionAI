@@ -263,6 +263,7 @@ export default function App() {
   const [customStarRadius, setCustomStarRadius] = useState<number | null>(null);
   const [comparisonResults, setComparisonResults] = useState<any[]>([]);
   const [isRecalculating, setIsRecalculating] = useState<boolean>(false);
+  const recalcTimeoutRef = useRef<any>(null);
 
   // Batch processing queue state
   const [batchQueue, setBatchQueue] = useState<BatchQueueItem[]>([]);
@@ -744,8 +745,12 @@ export default function App() {
     if (!report) return;
     setIsRecalculating(true);
 
+    if (recalcTimeoutRef.current) {
+      clearTimeout(recalcTimeoutRef.current);
+    }
+
     // Offload heavy computation to a deferred setTimeout block to prevent main thread blocking (UI responsiveness)
-    setTimeout(() => {
+    recalcTimeoutRef.current = setTimeout(() => {
       const currentStarRadius = starRadiusValue !== null ? starRadiusValue : (report.parameters.starRadius || 1.0);
       const starRadiusInEarth = currentStarRadius * 109.2;
       
@@ -798,8 +803,14 @@ export default function App() {
 
   useEffect(() => {
     if (report) {
+      setComparisonResults([]);
       recalculateModel(customStarRadius);
     }
+    return () => {
+      if (recalcTimeoutRef.current) {
+        clearTimeout(recalcTimeoutRef.current);
+      }
+    };
   }, [customStarRadius, report, recalculateModel]);
 
   const handleResetStarRadius = useCallback(() => {

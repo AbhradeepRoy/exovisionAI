@@ -2884,7 +2884,7 @@ export default function App() {
                               whileHover={{ y: -4, scale: 1.01 }}
                               className={`relative bg-space-900 border rounded-xl p-4 flex flex-col justify-between transition-all duration-300 ${
                                 planetSNR >= 4.0
-                                  ? "border-emerald-500/45 shadow-[0_0_12px_rgba(16,185,129,0.08)]"
+                                  ? "border-emerald-500 shadow-[0_0_16px_rgba(16,185,129,0.15)]"
                                   : "border-space-800 shadow-xl"
                               }`}
                             >

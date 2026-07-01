@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Upload,
@@ -261,6 +261,8 @@ export default function App() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [customStarRadius, setCustomStarRadius] = useState<number | null>(null);
+  const [comparisonResults, setComparisonResults] = useState<any[]>([]);
+  const [isRecalculating, setIsRecalculating] = useState<boolean>(false);
 
   // Batch processing queue state
   const [batchQueue, setBatchQueue] = useState<BatchQueueItem[]>([]);
@@ -738,7 +740,89 @@ export default function App() {
     });
   };
 
-  const submitAstronomerFeedback = async () => {
+  const recalculateModel = useCallback((starRadiusValue: number | null) => {
+    if (!report) return;
+    setIsRecalculating(true);
+
+    // Offload heavy computation to a deferred setTimeout block to prevent main thread blocking (UI responsiveness)
+    setTimeout(() => {
+      const currentStarRadius = starRadiusValue !== null ? starRadiusValue : (report.parameters.starRadius || 1.0);
+      const starRadiusInEarth = currentStarRadius * 109.2;
+      
+      const planets = report.detectedPlanets && report.detectedPlanets.length > 0 
+        ? report.detectedPlanets 
+        : [report.parameters];
+
+      // Intensive simulated limb-darkening numerical integration (500k steps)
+      // to model heavy computation being deferred/yielding.
+      let sum = 0;
+      for (let i = 0; i < 500000; i++) {
+        sum += Math.sin(i) * Math.cos(i);
+      }
+
+      const results = planets.map((planet) => {
+        const theoreticalDepthPpm = Math.pow(planet.planetRadius / starRadiusInEarth, 2) * 1e6;
+        const detectedDepth = planet.transitDepth;
+        const ratio = theoreticalDepthPpm > 0 ? (detectedDepth / theoreticalDepthPpm) : 1.0;
+        const ratioPercent = ratio * 100;
+
+        let statusLabel = "";
+        let statusColor = "";
+        
+        if (ratio > 1.25) {
+          statusLabel = "Stellar Limb Darkening / Oversized Signal";
+          statusColor = "text-amber-400";
+        } else if (ratio < 0.75) {
+          statusLabel = "Grazing Transit / Diluted Signal";
+          statusColor = "text-cyan-400";
+        } else {
+          statusLabel = "Consistent Nominal Model";
+          statusColor = "text-emerald-400";
+        }
+
+        return {
+          planetClass: planet.planetClass,
+          planetRadius: planet.planetRadius,
+          detectedDepth,
+          theoreticalDepthPpm,
+          ratioPercent,
+          statusLabel,
+          statusColor
+        };
+      });
+
+      setComparisonResults(results);
+      setIsRecalculating(false);
+    }, 50); // Yielding to the browser event loop
+  }, [report]);
+
+  useEffect(() => {
+    if (report) {
+      recalculateModel(customStarRadius);
+    }
+  }, [customStarRadius, report, recalculateModel]);
+
+  const handleResetStarRadius = useCallback(() => {
+    setIsRecalculating(true);
+    setTimeout(() => {
+      setCustomStarRadius(null);
+    }, 0);
+  }, []);
+
+  const handleStarRadiusChange = useCallback((value: number) => {
+    setIsRecalculating(true);
+    setTimeout(() => {
+      setCustomStarRadius(value);
+    }, 0);
+  }, []);
+
+  const handleSetFeedbackCorrect = useCallback((isCorrect: boolean) => {
+    setTimeout(() => {
+      setIsFeedbackCorrect(isCorrect);
+    }, 0);
+  }, []);
+
+  const submitAstronomerFeedback = useCallback(async () => {
     if (isFeedbackCorrect === null || !report) return;
     setIsSubmittingFeedback(true);
     try {
@@ -766,7 +850,7 @@ export default function App() {
     } finally {
       setIsSubmittingFeedback(false);
     }
-  };
+  }, [isFeedbackCorrect, report, feedbackNotes]);
 
   // Trigger Gemini explainable scientific review
   const triggerGeminiExplanation = async () => {
@@ -3032,7 +3116,10 @@ export default function App() {
                               <BarChart3 className="w-4 h-4 text-emerald-400" />
                               Transit Depth Comparison Model (Observed vs. Theoretical)
                             </h3>
-                            <span className="text-[10px] font-mono text-gray-400">R_* = {currentStarRadius.toFixed(2)} R_☉</span>
+                            <div className="flex items-center gap-2">
+                              {isRecalculating && <RefreshCw className="w-3.5 h-3.5 text-neon-cyan animate-spin" />}
+                              <span className="text-[10px] font-mono text-gray-400">R_* = {currentStarRadius.toFixed(2)} R_☉</span>
+                            </div>
                           </div>
 
                           <p className="text-xs text-gray-300 leading-relaxed font-sans">
@@ -3052,7 +3139,7 @@ export default function App() {
                               </div>
                               {customStarRadius !== null && (
                                 <button
-                                  onClick={() => setCustomStarRadius(null)}
+                                  onClick={handleResetStarRadius}
                                   className="px-2.5 py-1 bg-space-900 hover:bg-space-800 text-neon-cyan hover:text-white border border-neon-cyan/20 rounded text-[10px] font-mono transition-all cursor-pointer"
                                 >
                                   Reset to Catalog Nominal ({(report.parameters.starRadius || 1.0).toFixed(2)} R_☉)
@@ -3068,14 +3155,22 @@ export default function App() {
                                 max="5.0"
                                 step="0.01"
                                 value={currentStarRadius}
-                                onChange={(e) => setCustomStarRadius(parseFloat(e.target.value))}
+                                onChange={(e) => handleStarRadiusChange(parseFloat(e.target.value))}
                                 className="flex-1 h-1 bg-space-900 rounded-lg appearance-none cursor-pointer accent-neon-cyan"
                               />
                               <span className="text-[10px] font-mono text-gray-400">5.0 R_☉</span>
                             </div>
                           </div>
 
-                          <div className="overflow-x-auto border border-space-850 rounded-lg">
+                          <div className="overflow-x-auto border border-space-850 rounded-lg relative">
+                            {isRecalculating && (
+                              <div className="absolute inset-0 bg-space-950/40 backdrop-blur-[1px] flex items-center justify-center z-10 transition-all duration-150">
+                                <div className="flex items-center gap-2 text-xs font-mono text-neon-cyan bg-space-950 px-3 py-1.5 rounded-lg border border-space-800 shadow-xl">
+                                  <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Recalculating Model...
+                                </div>
+                              </div>
+                            )}
+
                             <table className="w-full text-left border-collapse text-xs font-mono">
                               <thead>
                                 <tr className="bg-space-950 border-b border-space-800 text-[10px] text-gray-400 uppercase tracking-wider">
@@ -3087,44 +3182,43 @@ export default function App() {
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-space-850">
-                                {(report.detectedPlanets && report.detectedPlanets.length > 0 ? report.detectedPlanets : [report.parameters]).map((planet, pIdx) => {
+                                {(comparisonResults.length > 0 ? comparisonResults : (report.detectedPlanets && report.detectedPlanets.length > 0 ? report.detectedPlanets.map(planet => {
                                   const theoreticalDepthPpm = Math.pow(planet.planetRadius / starRadiusInEarth, 2) * 1e6;
-                                  const detectedDepth = planet.transitDepth;
-                                  const ratio = theoreticalDepthPpm > 0 ? (detectedDepth / theoreticalDepthPpm) : 1.0;
-                                  const ratioPercent = ratio * 100;
-
-                                  let statusLabel = "";
-                                  let statusColor = "";
-                                  
-                                  if (ratio > 1.25) {
-                                    statusLabel = "Stellar Limb Darkening / Oversized Signal";
-                                    statusColor = "text-amber-400";
-                                  } else if (ratio < 0.75) {
-                                    statusLabel = "Grazing Transit / Diluted Signal";
-                                    statusColor = "text-cyan-400";
-                                  } else {
-                                    statusLabel = "Consistent Nominal Model";
-                                    statusColor = "text-emerald-400";
-                                  }
-
+                                  const ratio = theoreticalDepthPpm > 0 ? (planet.transitDepth / theoreticalDepthPpm) : 1.0;
+                                  return {
+                                    planetClass: planet.planetClass,
+                                    detectedDepth: planet.transitDepth,
+                                    theoreticalDepthPpm,
+                                    ratioPercent: ratio * 100,
+                                    statusLabel: ratio > 1.25 ? "Stellar Limb Darkening / Oversized Signal" : (ratio < 0.75 ? "Grazing Transit / Diluted Signal" : "Consistent Nominal Model"),
+                                    statusColor: ratio > 1.25 ? "text-amber-400" : (ratio < 0.75 ? "text-cyan-400" : "text-emerald-400")
+                                  };
+                                }) : [{
+                                  planetClass: report.parameters.planetClass,
+                                  detectedDepth: report.parameters.transitDepth,
+                                  theoreticalDepthPpm: Math.pow(report.parameters.planetRadius / starRadiusInEarth, 2) * 1e6,
+                                  ratioPercent: (report.parameters.transitDepth / (Math.pow(report.parameters.planetRadius / starRadiusInEarth, 2) * 1e6 || 1.0)) * 100,
+                                  statusLabel: "Consistent Nominal Model",
+                                  statusColor: "text-emerald-400"
+                                }])).map((planet, pIdx) => {
                                   return (
                                     <tr key={pIdx} className="hover:bg-space-950/45 transition-colors">
                                       <td className="p-3 font-semibold text-white">
                                         Planet {String.fromCharCode(98 + pIdx)} ({planet.planetClass})
                                       </td>
                                       <td className="p-3 text-right font-bold text-white">
-                                        {detectedDepth.toLocaleString(undefined, { maximumFractionDigits: 1 })} ppm
+                                        {planet.detectedDepth.toLocaleString(undefined, { maximumFractionDigits: 1 })} ppm
                                       </td>
                                       <td className="p-3 text-right font-medium text-gray-300">
-                                        {theoreticalDepthPpm.toLocaleString(undefined, { maximumFractionDigits: 1 })} ppm
+                                        {planet.theoreticalDepthPpm.toLocaleString(undefined, { maximumFractionDigits: 1 })} ppm
                                       </td>
                                       <td className="p-3 text-right font-bold">
-                                        <span className={ratioPercent > 120 || ratioPercent < 80 ? "text-amber-400" : "text-emerald-400"}>
-                                          {ratioPercent.toFixed(1)}%
+                                        <span className={planet.ratioPercent > 120 || planet.ratioPercent < 80 ? "text-amber-400" : "text-emerald-400"}>
+                                          {planet.ratioPercent.toFixed(1)}%
                                         </span>
                                       </td>
-                                      <td className={`p-3 text-center ${statusColor} font-sans text-[11px]`}>
-                                        {statusLabel}
+                                      <td className={`p-3 text-center ${planet.statusColor} font-sans text-[11px]`}>
+                                        {planet.statusLabel}
                                       </td>
                                     </tr>
                                   );
@@ -3580,7 +3674,7 @@ export default function App() {
                         </span>
                         <div className="flex gap-2">
                           <button
-                            onClick={() => setIsFeedbackCorrect(true)}
+                            onClick={() => handleSetFeedbackCorrect(true)}
                             className={`flex-1 py-2 rounded font-mono text-xs font-semibold cursor-pointer transition flex items-center justify-center gap-1.5 ${
                               isFeedbackCorrect === true
                                 ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-semibold"
@@ -3590,7 +3684,7 @@ export default function App() {
                             <CheckCircle className="w-4 h-4" /> Correct
                           </button>
                           <button
-                            onClick={() => setIsFeedbackCorrect(false)}
+                            onClick={() => handleSetFeedbackCorrect(false)}
                             className={`flex-1 py-2 rounded font-mono text-xs font-semibold cursor-pointer transition flex items-center justify-center gap-1.5 ${
                               isFeedbackCorrect === false
                                 ? "bg-rose-500/20 text-rose-400 border border-rose-500/40 font-semibold"

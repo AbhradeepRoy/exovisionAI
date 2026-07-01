@@ -1,0 +1,6 @@
+{
+  "name": "ExoVision AI – Intelligent Exoplanet Transit Detection Platform",
+  "description": "An expert AI-powered exoplanet transit detection system analyzing light curve datasets (Kepler, TESS) with preprocessing, periodic signal extraction, machine learning ensembles (CNN, BiLSTM, XGBoost), and explainable AI insights.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
